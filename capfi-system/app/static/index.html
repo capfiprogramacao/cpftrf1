@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TRF1 — Consulta de Precatórios</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:         #0f172a;
+      --surface:    #1e293b;
+      --surface2:   #263348;
+      --border:     #334155;
+      --text:       #e2e8f0;
+      --text-muted: #94a3b8;
+      --blue:       #3b82f6;
+      --blue-dark:  #1d4ed8;
+      --green:      #22c55e;
+      --red:        #ef4444;
+      --yellow:     #f59e0b;
+      --gray:       #64748b;
+      --radius:     12px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      padding: 24px 16px;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 32px;
+      max-width: 1100px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .logo {
+      background: #1e40af;
+      color: #fff;
+      font-weight: 800;
+      font-size: 20px;
+      padding: 10px 16px;
+      border-radius: 10px;
+      letter-spacing: 1px;
+    }
+    header h1 { font-size: 22px; font-weight: 700; }
+    header p  { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+
+    /* ── Container central ── */
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    /* ── Seções ── */
+    .section {
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 28px 32px;
+      margin-bottom: 24px;
+    }
+    .section-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 20px;
+    }
+
+    /* ── Upload ── */
+    #upload-area {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+    }
+    #upload-area:hover, #upload-area.dragover {
+      border-color: var(--blue);
+      background: rgba(59,130,246,0.05);
+    }
+    #upload-area input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .upload-icon { font-size: 48px; margin-bottom: 12px; }
+    .upload-title { font-size: 18px; font-weight: 600; margin-bottom: 6px; }
+    .upload-sub   { font-size: 13px; color: var(--text-muted); }
+
+    #file-info {
+      display: none;
+      align-items: center;
+      gap: 14px;
+      margin-top: 16px;
+      padding: 14px 18px;
+      background: rgba(59,130,246,0.1);
+      border: 1px solid rgba(59,130,246,0.3);
+      border-radius: 8px;
+    }
+    #file-info .file-icon { font-size: 28px; }
+    #file-info .file-name { font-weight: 600; font-size: 15px; }
+    #file-info .file-rows { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+    /* ── Botões ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 28px;
+      border-radius: 8px;
+      border: none;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary  { background: var(--blue); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--blue-dark); }
+    .btn-success  { background: #15803d; color: #fff; }
+    .btn-success:hover:not(:disabled) { background: #166534; }
+    .btn-row { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+
+    /* ── Cards de resumo ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      border-left: 4px solid transparent;
+    }
+    .stat-card.total   { border-color: var(--blue);   }
+    .stat-card.ok      { border-color: var(--green);  }
+    .stat-card.pago    { border-color: var(--red);    }
+    .stat-card.vazio   { border-color: var(--gray);   }
+    .stat-card.erro    { border-color: var(--yellow); }
+    .stat-label  { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .stat-value  { font-size: 34px; font-weight: 800; line-height: 1; }
+    .stat-card.total .stat-value { color: #60a5fa; }
+    .stat-card.ok    .stat-value { color: #4ade80; }
+    .stat-card.pago  .stat-value { color: #f87171; }
+    .stat-card.vazio .stat-value { color: var(--text-muted); }
+    .stat-card.erro  .stat-value { color: #fbbf24; }
+
+    /* ── Barra de progresso ── */
+    .progress-wrap {
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 22px 28px;
+      margin-bottom: 24px;
+    }
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .progress-header span   { font-size: 14px; color: var(--text-muted); }
+    .progress-header strong { font-size: 15px; }
+    .progress-bar-bg   { background: var(--border); border-radius: 99px; height: 10px; overflow: hidden; }
+    .progress-bar-fill { background: linear-gradient(90deg, var(--blue), #06b6d4); height: 100%; border-radius: 99px; transition: width 0.4s ease; }
+    .progress-eta { margin-top: 8px; font-size: 12px; color: var(--gray); }
+
+    /* ── Tabela de resultados ── */
+    .table-wrap { overflow-x: auto; max-height: 460px; overflow-y: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead th {
+      background: #0f172a;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.5px;
+      padding: 10px 12px;
+      text-align: left;
+      position: sticky; top: 0; z-index: 1;
+    }
+    tbody tr { border-bottom: 1px solid var(--surface); transition: background 0.1s; }
+    tbody tr:hover { background: var(--surface2); }
+    td { padding: 10px 12px; color: #cbd5e1; vertical-align: middle; }
+
+    .pill {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 99px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .pill-ok    { background: #14532d; color: #4ade80; }
+    .pill-pago  { background: #7f1d1d; color: #fca5a5; }
+    .pill-vazio { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border); }
+    .pill-erro  { background: #78350f; color: #fcd34d; }
+    .pill-proc  { background: #1e3a5f; color: #93c5fd; }
+
+    /* ── Spinner ── */
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid var(--border); border-top-color: var(--blue);
+      border-radius: 50%; animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Badge status ── */
+    #status-badge {
+      margin-left: auto; padding: 6px 16px; border-radius: 99px; font-size: 13px; font-weight: 600;
+    }
+    .badge-idle       { background: var(--border); color: var(--text-muted); }
+    .badge-processing { background: #065f46; color: #6ee7b7; }
+    .badge-done       { background: #1e3a5f; color: #93c5fd; }
+
+    /* ── Estados de visibilidade ── */
+    .hidden { display: none !important; }
+
+    /* ── Empty state ── */
+    .empty { text-align: center; padding: 40px; color: var(--gray); font-size: 14px; }
+
+    .update-time { text-align: right; font-size: 11px; color: var(--gray); margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">TRF1</div>
+  <div>
+    <h1>Consulta de Precatórios</h1>
+    <p>Automação de consulta por CPF no sistema TRF1</p>
+  </div>
+  <span id="status-badge" class="badge-idle">Aguardando</span>
+</header>
+
+<div class="container">
+
+  <!-- ── ETAPA 1: Upload ── -->
+  <div class="section" id="section-upload">
+    <div class="section-title">1. Carregar Planilha</div>
+
+    <div id="upload-area">
+      <input type="file" id="file-input" accept=".xlsx,.xls"/>
+      <div class="upload-icon">📊</div>
+      <div class="upload-title">Arraste sua planilha aqui</div>
+      <div class="upload-sub">ou clique para selecionar — .xlsx com colunas NOME e CPF</div>
+    </div>
+
+    <div id="file-info">
+      <div class="file-icon">📄</div>
+      <div>
+        <div class="file-name" id="file-name-display"></div>
+        <div class="file-rows" id="file-rows-display"></div>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-iniciar" disabled onclick="iniciarProcessamento()">
+        ▶ Iniciar Consulta
+      </button>
+    </div>
+  </div>
+
+  <!-- ── ETAPA 2: Progresso ── -->
+  <div id="section-progresso" class="hidden">
+
+    <div class="stats-grid">
+      <div class="stat-card total">
+        <div class="stat-label">Total</div>
+        <div class="stat-value" id="s-total">0</div>
+      </div>
+      <div class="stat-card ok">
+        <div class="stat-label">Encontrados</div>
+        <div class="stat-value" id="s-ok">0</div>
+      </div>
+      <div class="stat-card pago">
+        <div class="stat-label">Pago / Excluir</div>
+        <div class="stat-value" id="s-pago">0</div>
+      </div>
+      <div class="stat-card vazio">
+        <div class="stat-label">Não encontrados</div>
+        <div class="stat-value" id="s-nao">0</div>
+      </div>
+      <div class="stat-card erro">
+        <div class="stat-label">Erros</div>
+        <div class="stat-value" id="s-erro">0</div>
+      </div>
+    </div>
+
+    <div class="progress-wrap">
+      <div class="progress-header">
+        <span>Progresso</span>
+        <strong id="prog-text">0 / 0</strong>
+      </div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="prog-bar" style="width:0%"></div>
+      </div>
+      <div class="progress-eta" id="prog-eta">Iniciando...</div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Registros processados</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Nome</th>
+              <th>CPF</th>
+              <th>Processo PRECAT</th>
+              <th>Processo Originário</th>
+              <th>Ano Orç.</th>
+              <th>Data Proposta</th>
+              <th>Hora</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="tabela-body">
+            <tr><td colspan="9" class="empty">Aguardando início do processamento...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="update-time" id="update-time"></div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-success hidden" id="btn-download" onclick="baixarResultado()">
+        ⬇ Baixar Planilha de Resultados
+      </button>
+      <button class="btn btn-primary" id="btn-nova" onclick="novaConsulta()" style="display:none">
+        + Nova Consulta
+      </button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  let jobId = null;
+  let ws = null;
+  let inicio = null;
+  const API = '';   // mesmo host
+
+  // ── Upload ────────────────────────────────────────────────────────────────
+  const fileInput   = document.getElementById('file-input');
+  const uploadArea  = document.getElementById('upload-area');
+  const fileInfo    = document.getElementById('file-info');
+  const btnIniciar  = document.getElementById('btn-iniciar');
+
+  uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+  uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+  uploadArea.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadArea.classList.remove('dragover');
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  });
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
+
+  async function handleFile(file) {
+    if (!file.name.match(/\.(xlsx|xls)$/i)) {
+      alert('Por favor, envie um arquivo .xlsx ou .xls');
+      return;
+    }
+
+    const form = new FormData();
+    form.append('file', file);
+
+    try {
+      const res = await fetch(`${API}/api/upload`, { method: 'POST', body: form });
+      if (!res.ok) {
+        const err = await res.json();
+        alert('Erro: ' + (err.detail || 'Falha no upload'));
+        return;
+      }
+      const data = await res.json();
+      jobId = data.job_id;
+
+      document.getElementById('file-name-display').textContent = data.nome_arquivo;
+      document.getElementById('file-rows-display').textContent = `${data.total} registros encontrados`;
+      fileInfo.style.display = 'flex';
+      btnIniciar.disabled = false;
+      document.getElementById('s-total').textContent = data.total;
+      document.getElementById('prog-text').textContent = `0 / ${data.total}`;
+    } catch(e) {
+      alert('Erro ao enviar arquivo: ' + e.message);
+    }
+  }
+
+  // ── Iniciar ───────────────────────────────────────────────────────────────
+  async function iniciarProcessamento() {
+    if (!jobId) return;
+    btnIniciar.disabled = true;
+
+    const res = await fetch(`${API}/api/iniciar/${jobId}`, { method: 'POST' });
+    if (!res.ok) { alert('Erro ao iniciar'); btnIniciar.disabled = false; return; }
+
+    inicio = Date.now();
+    document.getElementById('section-upload').classList.add('hidden');
+    document.getElementById('section-progresso').classList.remove('hidden');
+    atualizarBadge('processing');
+    conectarWS();
+  }
+
+  // ── WebSocket ─────────────────────────────────────────────────────────────
+  function conectarWS() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws/${jobId}`);
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.tipo === 'progresso') renderProgresso(msg);
+      if (msg.tipo === 'concluido') onConcluido();
+    };
+
+    ws.onerror = () => {
+      setTimeout(() => { if (ws.readyState !== WebSocket.OPEN) conectarWS(); }, 3000);
+    };
+  }
+
+  // ── Renderizar progresso ──────────────────────────────────────────────────
+  function renderProgresso(data) {
+    const total    = data.total || 1;
+    const proc     = data.processados;
+    const pct      = Math.round((proc / total) * 100);
+
+    document.getElementById('s-total').textContent = total;
+    document.getElementById('s-ok').textContent    = data.encontrados;
+    document.getElementById('s-pago').textContent  = data.pagos;
+    document.getElementById('s-nao').textContent   = data.nao_encontrados;
+    document.getElementById('s-erro').textContent  = data.erros;
+    document.getElementById('prog-text').textContent = `${proc} / ${total}`;
+    document.getElementById('prog-bar').style.width = `${pct}%`;
+
+    // ETA
+    if (proc > 0 && inicio && !data.concluido) {
+      const elapsed  = (Date.now() - inicio) / 1000;
+      const rate     = proc / elapsed;
+      const remaining = (total - proc) / rate;
+      const m = Math.floor(remaining / 60);
+      const s = Math.floor(remaining % 60);
+      document.getElementById('prog-eta').textContent = `⏱  Tempo restante estimado: ${m}m ${s}s`;
+    }
+
+    // Tabela (renderiza todos do histórico)
+    renderTabela(data.historico || []);
+    document.getElementById('update-time').textContent =
+      'Última atualização: ' + new Date().toLocaleTimeString('pt-BR');
+  }
+
+  function renderTabela(historico) {
+    const tbody = document.getElementById('tabela-body');
+    if (!historico.length) return;
+
+    const reversed = [...historico].reverse();
+    tbody.innerHTML = reversed.map((r, i) => `
+      <tr>
+        <td style="color:var(--gray)">${historico.length - i}</td>
+        <td style="font-weight:500;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.nome}">${r.nome}</td>
+        <td style="font-family:monospace;font-size:12px">${r.cpf}</td>
+        <td style="font-family:monospace;font-size:11px">
+          ${r.processo_precat ? `<span class="pill pill-proc">${r.processo_precat}</span>` : '<span style="color:var(--gray)">—</span>'}
+        </td>
+        <td style="font-family:monospace;font-size:11px;color:#93c5fd">${r.processo_originario || '—'}</td>
+        <td style="text-align:center;font-weight:700;color:#fbbf24">${r.ano_orcamentario || '—'}</td>
+        <td style="text-align:center;font-size:12px;color:var(--text-muted)">${r.data_proposta || '—'}</td>
+        <td style="color:var(--gray);font-size:12px">${r.hora}</td>
+        <td>${pillStatus(r.status)}</td>
+      </tr>
+    `).join('');
+  }
+
+  function pillStatus(s) {
+    if (!s) return '<span class="pill pill-vazio">—</span>';
+    const sl = s.toLowerCase();
+    if (sl.includes('encontrado') && !sl.includes('não')) return `<span class="pill pill-ok">${s}</span>`;
+    if (sl.includes('pago'))         return `<span class="pill pill-pago">${s}</span>`;
+    if (sl.includes('erro') || sl.includes('timeout')) return `<span class="pill pill-erro">${s}</span>`;
+    return `<span class="pill pill-vazio">${s}</span>`;
+  }
+
+  // ── Concluído ─────────────────────────────────────────────────────────────
+  function onConcluido() {
+    atualizarBadge('done');
+    document.getElementById('prog-eta').textContent = '✅  Processamento concluído!';
+    document.getElementById('btn-download').classList.remove('hidden');
+    document.getElementById('btn-nova').style.display = 'inline-flex';
+    if (ws) ws.close();
+  }
+
+  function atualizarBadge(estado) {
+    const badge = document.getElementById('status-badge');
+    const estados = {
+      idle:       ['Aguardando',       'badge-idle'],
+      processing: ['⏳ Processando...', 'badge-processing'],
+      done:       ['✅ Concluído',      'badge-done'],
+    };
+    const [txt, cls] = estados[estado] || estados.idle;
+    badge.textContent = txt;
+    badge.className = cls;
+  }
+
+  // ── Download ──────────────────────────────────────────────────────────────
+  function baixarResultado() {
+    if (!jobId) return;
+    window.location.href = `${API}/api/download/${jobId}`;
+  }
+
+  // ── Nova consulta ─────────────────────────────────────────────────────────
+  function novaConsulta() {
+    jobId = null; ws = null; inicio = null;
+    fileInput.value = '';
+    fileInfo.style.display = 'none';
+    btnIniciar.disabled = true;
+    document.getElementById('btn-download').classList.add('hidden');
+    document.getElementById('btn-nova').style.display = 'none';
+    document.getElementById('tabela-body').innerHTML =
+      '<tr><td colspan="9" class="empty">Aguardando início do processamento...</td></tr>';
+    document.getElementById('prog-bar').style.width = '0%';
+    document.getElementById('section-upload').classList.remove('hidden');
+    document.getElementById('section-progresso').classList.add('hidden');
+    atualizarBadge('idle');
+  }
+</script>
+</body>
+</html>

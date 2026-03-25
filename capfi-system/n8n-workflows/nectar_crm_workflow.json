@@ -1,0 +1,237 @@
+{
+  "name": "CAPFI — Integração Néctar CRM",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "capfi/novo-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-entrada",
+      "name": "Webhook — Novo Lead TRF1",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "notes": "Recebe dados do FastAPI quando um processo 'Encontrado' é identificado"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.status }}",
+              "operation": "contains",
+              "value2": "Encontrado"
+            }
+          ]
+        }
+      },
+      "id": "filtro-encontrado",
+      "name": "Filtrar — Apenas Encontrados",
+      "type": "n8n-nodes-base.if",
+      "position": [460, 300],
+      "notes": "Só envia ao Néctar processos com status Encontrado"
+    },
+    {
+      "parameters": {
+        "url": "https://app.nectarcrm.com.br/crm/api/1/contatos/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "method": "GET",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "busca",
+              "value": "={{ $json.cpf }}"
+            },
+            {
+              "name": "exato",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "buscar-contato-nectar",
+      "name": "Buscar Contato no Néctar",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [680, 200],
+      "notes": "Verifica se o contato já existe no Néctar CRM pelo CPF"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.total }}",
+              "operation": "equal",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "checar-existe",
+      "name": "Contato já existe?",
+      "type": "n8n-nodes-base.if",
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://app.nectarcrm.com.br/crm/api/1/contatos/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "nome",
+              "value": "={{ $('Webhook — Novo Lead TRF1').item.json.nome }}"
+            },
+            {
+              "name": "cpf",
+              "value": "={{ $('Webhook — Novo Lead TRF1').item.json.cpf }}"
+            },
+            {
+              "name": "tags",
+              "value": "Precatório TRF1"
+            },
+            {
+              "name": "origem",
+              "value": "Sistema CAPFI"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "criar-contato",
+      "name": "Criar Contato no Néctar",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1120, 100],
+      "notes": "Cria novo contato se não existir"
+    },
+    {
+      "parameters": {
+        "url": "https://app.nectarcrm.com.br/crm/api/1/oportunidades/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "nome",
+              "value": "=Precatório TRF1 — {{ $('Webhook — Novo Lead TRF1').item.json.nome }}"
+            },
+            {
+              "name": "contato_id",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "name": "descricao",
+              "value": "=Processo: {{ $('Webhook — Novo Lead TRF1').item.json.processo_precat }}\nOriginário: {{ $('Webhook — Novo Lead TRF1').item.json.processo_originario }}\nAno Orçamentário: {{ $('Webhook — Novo Lead TRF1').item.json.ano_orcamentario }}\nData Proposta: {{ $('Webhook — Novo Lead TRF1').item.json.data_proposta }}\nIdentificado em: {{ $now.format('DD/MM/YYYY HH:mm') }}"
+            },
+            {
+              "name": "status",
+              "value": "Em prospecção"
+            },
+            {
+              "name": "origem",
+              "value": "Sistema CAPFI"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "criar-oportunidade",
+      "name": "Criar Oportunidade no Néctar",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1340, 200],
+      "notes": "Cria oportunidade vinculada ao contato"
+    },
+    {
+      "parameters": {
+        "url": "https://app.nectarcrm.com.br/crm/api/1/tarefas/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "titulo",
+              "value": "=Contatar sobre Precatório — {{ $('Webhook — Novo Lead TRF1').item.json.nome }}"
+            },
+            {
+              "name": "descricao",
+              "value": "=Lead identificado pelo Sistema CAPFI com precatório no TRF1.\nProcesso: {{ $('Webhook — Novo Lead TRF1').item.json.processo_precat }}\nAno Orçamentário: {{ $('Webhook — Novo Lead TRF1').item.json.ano_orcamentario }}"
+            },
+            {
+              "name": "prioridade",
+              "value": "Alta"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "criar-tarefa",
+      "name": "Criar Tarefa de Acompanhamento",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1560, 200],
+      "notes": "Cria tarefa para o time entrar em contato"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"sucesso\": true, \"mensagem\": \"Lead enviado ao Néctar CRM com sucesso\" }"
+      },
+      "id": "resposta-sucesso",
+      "name": "Resposta — Sucesso",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [1780, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"sucesso\": false, \"mensagem\": \"Status não qualificado para CRM\" }"
+      },
+      "id": "resposta-ignorado",
+      "name": "Resposta — Ignorado",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [680, 420]
+    }
+  ],
+  "connections": {
+    "Webhook — Novo Lead TRF1": {
+      "main": [[{"node": "Filtrar — Apenas Encontrados", "type": "main", "index": 0}]]
+    },
+    "Filtrar — Apenas Encontrados": {
+      "main": [
+        [{"node": "Buscar Contato no Néctar", "type": "main", "index": 0}],
+        [{"node": "Resposta — Ignorado", "type": "main", "index": 0}]
+      ]
+    },
+    "Buscar Contato no Néctar": {
+      "main": [[{"node": "Contato já existe?", "type": "main", "index": 0}]]
+    },
+    "Contato já existe?": {
+      "main": [
+        [{"node": "Criar Contato no Néctar", "type": "main", "index": 0}],
+        [{"node": "Criar Oportunidade no Néctar", "type": "main", "index": 0}]
+      ]
+    },
+    "Criar Contato no Néctar": {
+      "main": [[{"node": "Criar Oportunidade no Néctar", "type": "main", "index": 0}]]
+    },
+    "Criar Oportunidade no Néctar": {
+      "main": [[{"node": "Criar Tarefa de Acompanhamento", "type": "main", "index": 0}]]
+    },
+    "Criar Tarefa de Acompanhamento": {
+      "main": [[{"node": "Resposta — Sucesso", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

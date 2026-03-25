@@ -1,0 +1,15 @@
+version: "3.9"
+
+services:
+  trf1-app:
+    build: .
+    container_name: trf1-precatorios
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persiste uploads e resultados fora do container
+      - ./uploads:/app/uploads
+      - ./results:/app/results
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1

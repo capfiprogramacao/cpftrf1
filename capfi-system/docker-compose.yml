@@ -1,0 +1,126 @@
+version: "3.9"
+
+# ─── CAPFI System — VPS Hostinger KVM 2 (8GB RAM) ─────────────────────────────
+# Serviços: Nginx + FastAPI + PostgreSQL + Ollama/Llama + n8n
+# Uso de RAM estimado: ~6.5GB de 8GB disponíveis
+
+services:
+
+  # ── Nginx — Reverse Proxy / Porta de entrada ──────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: capfi_nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - api
+      - n8n
+    networks:
+      - capfi_net
+
+  # ── FastAPI — Backend principal ────────────────────────────────────────────
+  api:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: capfi_api
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql://capfi:${DB_PASSWORD}@postgres:5432/capfi_db
+      - OLLAMA_URL=http://ollama:11434
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
+      - DATAJUD_API_KEY=cDZHYzlZa0JadVREZDJCendQbXY6SkJlTzNjLV9TRENyQk1RdnFKZGRQdw==
+      - NECTAR_API_TOKEN=${NECTAR_API_TOKEN}
+      - SECRET_KEY=${SECRET_KEY}
+    volumes:
+      - uploads_data:/app/uploads
+      - results_data:/app/results
+      - checkpoints_data:/app/checkpoints
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    networks:
+      - capfi_net
+
+  # ── PostgreSQL — Banco de dados ────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: capfi_postgres
+    restart: always
+    environment:
+      - POSTGRES_DB=capfi_db
+      - POSTGRES_USER=capfi
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U capfi -d capfi_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - capfi_net
+
+  # ── Ollama — Llama local (análise de processos) ────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: capfi_ollama
+    restart: always
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - capfi_net
+    # RAM: ~2.5GB para Llama 3.2 3B
+
+  # ── n8n — Automações e integração Néctar CRM ──────────────────────────────
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: capfi_n8n
+    restart: always
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://${VPS_IP}/n8n/
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=n8n_db
+      - DB_POSTGRESDB_USER=capfi
+      - DB_POSTGRESDB_PASSWORD=${DB_PASSWORD}
+      - N8N_ENCRYPTION_KEY=${SECRET_KEY}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n-workflows:/home/node/.n8n/workflows:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - capfi_net
+
+# ── Volumes persistentes ───────────────────────────────────────────────────
+volumes:
+  postgres_data:
+  ollama_data:
+  n8n_data:
+  uploads_data:
+  results_data:
+  checkpoints_data:
+  nginx_logs:
+
+# ── Rede interna ───────────────────────────────────────────────────────────
+networks:
+  capfi_net:
+    driver: bridge
