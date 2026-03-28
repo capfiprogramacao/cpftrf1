@@ -205,6 +205,9 @@ async def worker(worker_id, fila_cpfs, lock, playwright, contagem, total_linhas)
                     fila_cpfs.task_done()
                     continue
 
+                # Salva URL da lista de processos para voltar depois
+                lista_url = page.url
+
                 # ── Etapas 2-4: Para cada linha deste CPF ────────────────
                 # Cache de (orig_norm → (precat, loa)) para este CPF
                 orig_cache = {}
@@ -233,9 +236,8 @@ async def worker(worker_id, fila_cpfs, lock, playwright, contagem, total_linhas)
                             status = "OK"
                             orig_cache[orig_n] = (precat, loa)
                             cache_tag = ""
-                            # Volta para a lista do CPF para o próximo ORIG
-                            await page.go_back()
-                            await page.wait_for_load_state('networkidle', timeout=20000)
+                            # Volta para a lista de processos (sem go_back)
+                            await page.goto(lista_url, timeout=25000, wait_until='networkidle')
                             await asyncio.sleep(1)
 
                     # Etapa 4 (implícita): salva esta linha
