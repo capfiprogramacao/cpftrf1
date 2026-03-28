@@ -131,8 +131,17 @@ async def extrair_loa_do_prc(page, prc):
 
     for ln in linhas_mov:
         texto = ' '.join(ln)
-        if 'proposta orçamentária' in texto.lower() and 'cjf' in texto.lower():
-            m = re.search(r'exercício\s+de\s+(\d{4})', texto, re.IGNORECASE)
+        # Procura linha com "CJF" (proposta orçamentária) — evita comparação com acento
+        if 'cjf' in texto.lower() and 'exerc' in texto.lower():
+            # O ano LOA fica na última célula: ex. "2027,data 13/02/2026"
+            # Pega o primeiro ano >= 2025 da última célula
+            for cell in reversed(ln):
+                anos = re.findall(r'\b(20\d{2})\b', cell)
+                for ano in anos:
+                    if int(ano) >= 2025:
+                        return ano
+            # Fallback: qualquer 20xx no texto completo após "DE "
+            m = re.search(r'exerc\S+\s+de\s+(20\d{2})', texto, re.IGNORECASE)
             if m:
                 return m.group(1)
     return None
@@ -205,42 +214,32 @@ async def worker(worker_id, fila_cpfs, lock, playwright, contagem, total_linhas)
                     fila_cpfs.task_done()
                     continue
 
-                # Salva URL da lista de processos para voltar depois
+                # Salva URL da lista de processos para voltar a cada linha
                 lista_url = page.url
 
-                # ── Etapas 2-4: Para cada linha deste CPF ────────────────
-                # Cache de (orig_norm → (precat, loa)) para este CPF
-                orig_cache = {}
-
-                for linha in linhas_do_cpf:
+                # ── Etapas 2-4: Cada linha processada individualmente ─────
+                for idx, linha in enumerate(linhas_do_cpf):
                     row_num = linha['row']
                     orig    = linha['orig']
-                    orig_n  = normaliza_orig(orig)
 
-                    if orig_n in orig_cache:
-                        precat, loa = orig_cache[orig_n]
-                        status = "OK" if precat else "Sem PRECAT"
-                        cache_tag = " [=]"
+                    # Garante que estamos na lista de processos do CPF
+                    if idx > 0:
+                        await page.goto(lista_url, timeout=25000, wait_until='networkidle')
+                        await asyncio.sleep(1)
+                        processos = await extrair_lista_processos(page)
+
+                    # Etapa 2: encontra o PRC correspondente ao ORIG desta linha
+                    prc = encontrar_prc(processos, orig)
+
+                    if prc is None:
+                        precat, loa, status = None, None, "Sem PRECAT"
                     else:
-                        # Etapa 2: encontra o PRC pelo ORIG da linha
-                        prc = encontrar_prc(processos, orig)
+                        precat = prc['col1'].strip()
+                        # Etapa 3: acessa PRC e extrai LOA da aba Movimentação
+                        loa = await extrair_loa_do_prc(page, prc)
+                        status = "OK" if precat else "Sem PRECAT"
 
-                        if prc is None:
-                            orig_cache[orig_n] = (None, None)
-                            precat, loa, status = None, None, "Sem PRECAT"
-                            cache_tag = ""
-                        else:
-                            precat = prc['col1'].strip()
-                            # Etapa 3: acessa PRC e extrai LOA
-                            loa = await extrair_loa_do_prc(page, prc)
-                            status = "OK"
-                            orig_cache[orig_n] = (precat, loa)
-                            cache_tag = ""
-                            # Volta para a lista de processos (sem go_back)
-                            await page.goto(lista_url, timeout=25000, wait_until='networkidle')
-                            await asyncio.sleep(1)
-
-                    # Etapa 4 (implícita): salva esta linha
+                    # Etapa 4: salva esta linha
                     await salvar_linha(row_num, precat, loa, status)
 
                     async with lock:
@@ -252,7 +251,7 @@ async def worker(worker_id, fila_cpfs, lock, playwright, contagem, total_linhas)
                             f"[W{worker_id}][{contagem[0]:03d}/{total_linhas}] "
                             f"{linha['nome'][:24]:<24} | "
                             f"ORIG: {orig[:30]:<30} | "
-                            f"PRECAT: {precat_str[:30]} | LOA: {loa_str}{cache_tag} {emoji}",
+                            f"PRECAT: {precat_str[:30]} | LOA: {loa_str} {emoji}",
                             flush=True
                         )
 
