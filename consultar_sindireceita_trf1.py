@@ -1,16 +1,15 @@
 """
 CAPFI — Consulta TRF1 | SINDIRECEITA_COMPLETO.xlsx
-Fluxo por linha:
-  1. Acessa TRF1 pelo CPF da linha
-  2. Lê o PROCESSO ORIGINÁRIO do Excel (col 3) e encontra o PRC correspondente no TRF1
-  3. Extrai PROCESSO PRECAT e ANO LOA
-  4. Atualiza a linha
-  5. Repete para todas as linhas do mesmo CPF (mesma consulta TRF1, novo ORIG se diferente)
-  6. Segue para o próximo CPF
+Fluxo por LINHA (cada linha faz sua própria consulta completa):
+  1. Busca CPF no TRF1
+  2. Localiza o PRC vinculado ao PROCESSO ORIGINÁRIO da linha (col 3)
+  3. Acessa o PRC, abre Movimentação, extrai o ANO LOA
+  4. Salva PRECAT (col 4) e ORÇAMENTO (col 5)
+  5. Repete para a próxima linha
 
 Como usar (Mac):
   cd ~/Desktop/cpftrf1
-  python3 reset_status_sindireceita.py     ← limpa dados antigos
+  python3 reset_status_sindireceita.py
   caffeinate -i python3 consultar_sindireceita_trf1.py
 """
 
@@ -26,7 +25,7 @@ from openpyxl import load_workbook
 # ─── CONFIGURAÇÃO ──────────────────────────────────────────────
 EXCEL_PATH  = "SINDIRECEITA_COMPLETO.xlsx"
 URL_BUSCA   = "https://processual.trf1.jus.br/consultaProcessual/cpfCnpjParte.php?secao=TRF1"
-NUM_WORKERS = 3     # 3 workers para estabilidade
+NUM_WORKERS = 3
 # ───────────────────────────────────────────────────────────────
 
 STATUS_SKIP = {"OK", "Sem PRECAT", "Não encontrado", "Erro permanente"}
@@ -54,16 +53,52 @@ async def salvar_linha(row_num, precat, orcamento, status):
     async with excel_lock:
         wb = load_workbook(EXCEL_PATH)
         ws = wb.active
-        if precat   is not None: ws.cell(row_num, COL_PRECAT).value = precat
-        if orcamento is not None: ws.cell(row_num, COL_ORC).value  = int(orcamento)
+        if precat    is not None: ws.cell(row_num, COL_PRECAT).value = precat
+        if orcamento is not None: ws.cell(row_num, COL_ORC).value   = int(orcamento)
         ws.cell(row_num, COL_STATUS).value = status
         wb.save(EXCEL_PATH)
 
-# ──────────────────────────────────────────────────────────────
-#  Extrai lista de processos da página TRF1 atual
-# ──────────────────────────────────────────────────────────────
-async def extrair_lista_processos(page):
-    return await page.evaluate('''() => {
+def encontrar_prc(processos, orig_planilha):
+    orig_norm = normaliza_orig(orig_planilha)
+    matches = [p for p in processos
+               if ('(PRC)' in p['col1'] or '(PREC)' in p['col1'])
+               and normaliza_orig(p['col2']) == orig_norm]
+    if matches:
+        return matches[-1]
+    fallback = [p for p in processos if '(PRC)' in p['col1'] or '(PREC)' in p['col1']]
+    return fallback[-1] if fallback else None
+
+async def processar_linha(page, row_num, cpf_raw, orig_proc, nome, primeira_vez):
+    """Faz a consulta completa para uma única linha e retorna (precat, loa, status)."""
+
+    # ── 1. Vai à página de busca ─────────────────────────────────
+    if primeira_vez:
+        await page.goto(URL_BUSCA, timeout=30000, wait_until='networkidle')
+        await asyncio.sleep(3)
+    else:
+        await page.goto(URL_BUSCA, timeout=30000, wait_until='networkidle')
+        await asyncio.sleep(1)
+
+    # ── 2. Preenche CPF e envia ──────────────────────────────────
+    inp = page.locator('input[name="cpf_cnpj"]')
+    await inp.click()
+    await inp.evaluate('el => el.value = ""')
+    await inp.fill(clean_cpf(cpf_raw))
+    await page.locator('input#enviar').click()
+    await page.wait_for_load_state('networkidle', timeout=30000)
+    await asyncio.sleep(2)
+
+    body = await page.evaluate('document.body.innerText')
+    if 'partes encontradas' not in body.lower() and 'nome da parte' not in body.lower():
+        return None, None, "Não encontrado"
+
+    # ── 3. Clica no nome da pessoa ───────────────────────────────
+    await page.locator('table a').first.click()
+    await page.wait_for_load_state('networkidle', timeout=25000)
+    await asyncio.sleep(2)
+
+    # ── 4. Extrai lista de processos ─────────────────────────────
+    processos = await page.evaluate('''() => {
         const linhas = [];
         document.querySelectorAll("table tr").forEach(row => {
             const cols = Array.from(row.querySelectorAll("td"));
@@ -77,95 +112,64 @@ async def extrair_lista_processos(page):
         return linhas;
     }''')
 
-# ──────────────────────────────────────────────────────────────
-#  Busca CPF no TRF1 e retorna a lista de processos da pessoa
-# ──────────────────────────────────────────────────────────────
-async def buscar_cpf_trf1(page, cpf_raw, primeira_vez):
-    if primeira_vez:
-        await page.goto(URL_BUSCA, timeout=30000, wait_until='networkidle')
-        await asyncio.sleep(3)
+    # ── 5. Encontra o PRC pelo ORIG desta linha ──────────────────
+    prc = encontrar_prc(processos, orig_proc)
+    if prc is None:
+        return None, None, "Sem PRECAT"
 
-    inp = page.locator('input[name="cpf_cnpj"]')
-    await inp.click()
-    await inp.evaluate('el => el.value = ""')
-    await inp.fill(clean_cpf(cpf_raw))
-    await page.locator('input#enviar').click()
-    await page.wait_for_load_state('networkidle', timeout=30000)
-    await asyncio.sleep(2)
+    precat = prc['col1'].strip()
 
-    body = await page.evaluate('document.body.innerText')
-    if 'partes encontradas' not in body.lower() and 'nome da parte' not in body.lower():
-        return None   # CPF não encontrado
-
-    await page.locator('table a').first.click()
-    await page.wait_for_load_state('networkidle', timeout=25000)
-    await asyncio.sleep(2)
-
-    return await extrair_lista_processos(page)
-
-# ──────────────────────────────────────────────────────────────
-#  Navega ao PRC e extrai o ano LOA da aba Movimentação
-# ──────────────────────────────────────────────────────────────
-async def extrair_loa_do_prc(page, prc):
-    if prc.get('href'):
-        await page.goto(prc['href'], timeout=30000, wait_until='networkidle')
+    # ── 6. Navega ao PRC pelo href direto ────────────────────────
+    prc_href = prc.get('href')
+    if prc_href and prc_href.startswith('http'):
+        await page.goto(prc_href, timeout=30000, wait_until='networkidle')
     else:
         prc_texto = prc['col1'][:20]
         await page.locator(f'a:has-text("{prc_texto}")').first.click()
         await page.wait_for_load_state('networkidle', timeout=30000)
-    await asyncio.sleep(2)
+    await asyncio.sleep(3)
 
+    # ── 7. Clica na aba Movimentação ─────────────────────────────
     mov_link = page.locator('a', has_text='Movimentação')
     if await mov_link.count() == 0:
-        return None
+        return precat, None, "OK"
 
     await mov_link.first.click()
-    await page.wait_for_load_state('networkidle', timeout=25000)
-    await asyncio.sleep(2)
+    # Aguarda mais tempo — conteúdo carrega via AJAX
+    await page.wait_for_load_state('networkidle', timeout=30000)
+    await asyncio.sleep(4)
 
+    # ── 8. Extrai o ANO LOA ──────────────────────────────────────
     linhas_mov = await page.evaluate('''() =>
         Array.from(document.querySelectorAll("table tr"))
         .map(row => Array.from(row.querySelectorAll("td")).map(c => c.innerText.trim()))
         .filter(r => r.length >= 2)
     ''')
 
+    loa = None
     for ln in linhas_mov:
         texto = ' '.join(ln)
-        # Procura linha com "CJF" (proposta orçamentária) — evita comparação com acento
         if 'cjf' in texto.lower() and 'exerc' in texto.lower():
-            # O ano LOA fica na última célula: ex. "2027,data 13/02/2026"
-            # Pega o primeiro ano >= 2025 da última célula
+            # Ano LOA está na última célula: ex. "2027,data 13/02/2026"
             for cell in reversed(ln):
                 anos = re.findall(r'\b(20\d{2})\b', cell)
                 for ano in anos:
-                    if int(ano) >= 2025:
-                        return ano
-            # Fallback: qualquer 20xx no texto completo após "DE "
-            m = re.search(r'exerc\S+\s+de\s+(20\d{2})', texto, re.IGNORECASE)
-            if m:
-                return m.group(1)
-    return None
+                    if int(ano) >= 2024:
+                        loa = ano
+                        break
+                if loa:
+                    break
+            if not loa:
+                # Fallback: procura no texto completo
+                m = re.search(r'exerc\S+\s+de\s+(20\d{2})', texto, re.IGNORECASE)
+                if m:
+                    loa = m.group(1)
+            break
 
-# ──────────────────────────────────────────────────────────────
-#  Encontra o PRC na lista que corresponde ao ORIG da linha
-# ──────────────────────────────────────────────────────────────
-def encontrar_prc(processos, orig_planilha):
-    orig_norm = normaliza_orig(orig_planilha)
-    # Match exato por ORIG
-    matches = [p for p in processos
-               if ('(PRC)' in p['col1'] or '(PREC)' in p['col1'])
-               and normaliza_orig(p['col2']) == orig_norm]
-    if matches:
-        return matches[-1]
-    # Fallback: qualquer PRC
-    fallback = [p for p in processos if '(PRC)' in p['col1'] or '(PREC)' in p['col1']]
-    return fallback[-1] if fallback else None
+    return precat, loa, "OK"
 
-# ──────────────────────────────────────────────────────────────
-#  Worker: processa um grupo de CPF de cada vez
-#  Para cada CPF: busca TRF1, depois percorre cada linha do grupo
-# ──────────────────────────────────────────────────────────────
-async def worker(worker_id, fila_cpfs, lock, playwright, contagem, total_linhas):
+
+async def worker(worker_id, fila, lock, playwright, contagem, total):
     browser = await playwright.chromium.launch(
         headless=True,
         args=["--no-sandbox", "--disable-dev-shm-usage",
@@ -186,107 +190,57 @@ async def worker(worker_id, fila_cpfs, lock, playwright, contagem, total_linhas)
     primeira_vez = True
     try:
         while True:
-            # Pega próximo grupo (um CPF com todas suas linhas)
             try:
-                cpf_raw, linhas_do_cpf = fila_cpfs.get_nowait()
+                row_num, cpf_raw, orig, nome = fila.get_nowait()
             except Exception:
                 break
 
-            nome_ref = linhas_do_cpf[0]['nome']
-            cpf_fmt  = format_cpf(cpf_raw)
-
             try:
-                # ── Etapa 1: Busca CPF no TRF1 ───────────────────────────
-                processos = await buscar_cpf_trf1(page, cpf_raw, primeira_vez)
+                precat, loa, status = await processar_linha(
+                    page, row_num, cpf_raw, orig, nome, primeira_vez
+                )
                 primeira_vez = False
 
-                if processos is None:
-                    # CPF não encontrado — marca todas as linhas
-                    for linha in linhas_do_cpf:
-                        await salvar_linha(linha['row'], None, None, "Não encontrado")
-                        async with lock:
-                            contagem[0] += 1
-                            print(f"[W{worker_id}][{contagem[0]:03d}/{total_linhas}] "
-                                  f"{linha['nome'][:26]:<26} | CPF não encontrado ⚪",
-                                  flush=True)
-                    await page.goto(URL_BUSCA, timeout=20000, wait_until='networkidle')
-                    await asyncio.sleep(2)
-                    fila_cpfs.task_done()
-                    continue
+                await salvar_linha(row_num, precat, loa, status)
 
-                # Salva URL da lista de processos para voltar a cada linha
-                lista_url = page.url
-
-                # ── Etapas 2-4: Cada linha processada individualmente ─────
-                for idx, linha in enumerate(linhas_do_cpf):
-                    row_num = linha['row']
-                    orig    = linha['orig']
-
-                    # Garante que estamos na lista de processos do CPF
-                    if idx > 0:
-                        await page.goto(lista_url, timeout=25000, wait_until='networkidle')
-                        await asyncio.sleep(1)
-                        processos = await extrair_lista_processos(page)
-
-                    # Etapa 2: encontra o PRC correspondente ao ORIG desta linha
-                    prc = encontrar_prc(processos, orig)
-
-                    if prc is None:
-                        precat, loa, status = None, None, "Sem PRECAT"
-                    else:
-                        precat = prc['col1'].strip()
-                        # Etapa 3: acessa PRC e extrai LOA da aba Movimentação
-                        loa = await extrair_loa_do_prc(page, prc)
-                        status = "OK" if precat else "Sem PRECAT"
-
-                    # Etapa 4: salva esta linha
-                    await salvar_linha(row_num, precat, loa, status)
-
-                    async with lock:
-                        contagem[0] += 1
-                        emoji = "✅" if status == "OK" else "⚪"
-                        precat_str = precat or "-"
-                        loa_str    = str(loa) if loa else "-"
-                        print(
-                            f"[W{worker_id}][{contagem[0]:03d}/{total_linhas}] "
-                            f"{linha['nome'][:24]:<24} | "
-                            f"ORIG: {orig[:30]:<30} | "
-                            f"PRECAT: {precat_str[:30]} | LOA: {loa_str} {emoji}",
-                            flush=True
-                        )
+                async with lock:
+                    contagem[0] += 1
+                    emoji = "✅" if status == "OK" else "⚪"
+                    print(
+                        f"[W{worker_id}][{contagem[0]:03d}/{total}] "
+                        f"{nome[:24]:<24} | "
+                        f"ORIG: {orig[:28]:<28} | "
+                        f"PRECAT: {(precat or '-')[:28]} | "
+                        f"LOA: {loa or '-'} {emoji}",
+                        flush=True
+                    )
 
             except PlaywrightTimeout:
-                print(f"[W{worker_id}] ⚠️  Timeout no CPF {cpf_fmt}", flush=True)
-                for linha in linhas_do_cpf:
-                    current_status = linha.get('status', '')
-                    if current_status not in STATUS_SKIP:
-                        await salvar_linha(linha['row'], None, None, "Timeout")
-                        async with lock:
-                            contagem[0] += 1
+                primeira_vez = False
+                await salvar_linha(row_num, None, None, "Timeout")
+                async with lock:
+                    contagem[0] += 1
+                    print(f"[W{worker_id}][{contagem[0]:03d}/{total}] "
+                          f"⚠️  Timeout: {nome[:30]}", flush=True)
                 try:
                     await page.goto(URL_BUSCA, timeout=15000, wait_until='domcontentloaded')
                     await asyncio.sleep(2)
                 except: pass
 
             except Exception as e:
-                print(f"[W{worker_id}] ❌ Erro no CPF {cpf_fmt}: {e}", flush=True)
-                for linha in linhas_do_cpf:
-                    current_status = linha.get('status', '')
-                    if current_status not in STATUS_SKIP:
-                        await salvar_linha(linha['row'], None, None, "Erro")
-                        async with lock:
-                            contagem[0] += 1
+                primeira_vez = False
+                await salvar_linha(row_num, None, None, "Erro")
+                async with lock:
+                    contagem[0] += 1
+                    print(f"[W{worker_id}][{contagem[0]:03d}/{total}] "
+                          f"❌ Erro {nome[:20]}: {e}", flush=True)
                 try:
                     await page.goto(URL_BUSCA, timeout=15000, wait_until='domcontentloaded')
                     await asyncio.sleep(2)
                 except: pass
 
-            # ── Etapa 5: próximo CPF ──────────────────────────────────
-            await page.goto(URL_BUSCA, timeout=20000, wait_until='networkidle')
-            await asyncio.sleep(1)
-            fila_cpfs.task_done()
-            await asyncio.sleep(1)
-
+            fila.task_done()
+            await asyncio.sleep(0.5)
     finally:
         await browser.close()
 
@@ -300,18 +254,15 @@ async def main():
 
     print(f"📂 Arquivo: {excel.resolve()}")
 
-    # Garante cabeçalho na coluna de controle
     wb = load_workbook(EXCEL_PATH)
     ws = wb.active
     if ws.cell(1, COL_STATUS).value is None:
         ws.cell(1, COL_STATUS).value = "STATUS_CONSULTA"
         wb.save(EXCEL_PATH)
 
-    # Lê todas as linhas e agrupa por CPF (mantendo ordem de aparição)
     wb  = load_workbook(EXCEL_PATH)
     ws  = wb.active
-    cpf_grupos = OrderedDict()
-
+    pendentes = []
     for row in range(2, ws.max_row + 1):
         nome    = str(ws.cell(row, COL_NOME).value or '').strip()
         cpf_raw = ws.cell(row, COL_CPF).value
@@ -322,51 +273,37 @@ async def main():
         cpf_c = clean_cpf(str(cpf_raw))
         if len(cpf_c) != 11:
             continue
-        if cpf_c not in cpf_grupos:
-            cpf_grupos[cpf_c] = {'cpf_raw': str(cpf_raw), 'linhas': []}
-        cpf_grupos[cpf_c]['linhas'].append({
-            'row': row, 'nome': nome, 'orig': orig, 'status': status
-        })
+        if status not in STATUS_SKIP:
+            pendentes.append((row, str(cpf_raw), orig, nome))
 
-    # Filtra grupos com pelo menos uma linha pendente
-    grupos_pendentes = []
-    total_linhas_pendentes = 0
-    for cpf_c, data in cpf_grupos.items():
-        linhas_pend = [l for l in data['linhas'] if l['status'] not in STATUS_SKIP]
-        if linhas_pend:
-            grupos_pendentes.append((data['cpf_raw'], data['linhas']))
-            total_linhas_pendentes += len(data['linhas'])
+    total   = ws.max_row - 1
+    feitas  = total - len(pendentes)
 
-    total_cpfs   = len(cpf_grupos)
-    total_linhas = sum(len(d['linhas']) for d in cpf_grupos.values())
-    feitas = total_linhas - total_linhas_pendentes
-
-    print(f"\n{'='*75}")
+    print(f"\n{'='*70}")
     print(f"  CAPFI — TRF1 | SINDIRECEITA COMPLETO")
     print(f"  Workers  : {NUM_WORKERS}")
-    print(f"  CPFs     : {total_cpfs} únicos")
-    print(f"  Linhas   : {total_linhas} total | Feitas: {feitas} | Pendentes: {total_linhas_pendentes}")
+    print(f"  Linhas   : {total} total | Feitas: {feitas} | Pendentes: {len(pendentes)}")
     print(f"  Início   : {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-    print(f"{'='*75}\n")
+    print(f"{'='*70}\n")
 
-    if not grupos_pendentes:
+    if not pendentes:
         print("✅ Todas as linhas já foram processadas!")
         return
 
-    fila_cpfs = asyncio.Queue()
-    for item in grupos_pendentes:
-        fila_cpfs.put_nowait(item)
+    fila     = asyncio.Queue()
+    for item in pendentes:
+        fila.put_nowait(item)
 
     lock     = asyncio.Lock()
     contagem = [0]
 
     async with async_playwright() as p:
         await asyncio.gather(*[
-            worker(i + 1, fila_cpfs, lock, p, contagem, total_linhas_pendentes)
-            for i in range(min(NUM_WORKERS, len(grupos_pendentes)))
+            worker(i + 1, fila, lock, p, contagem, len(pendentes))
+            for i in range(min(NUM_WORKERS, len(pendentes)))
         ])
 
-    print(f"\n🏁 Concluído! {contagem[0]}/{total_linhas} linhas processadas.")
+    print(f"\n🏁 Concluído! {contagem[0]}/{total} linhas processadas.")
     print(f"📁 Arquivo salvo: {excel.resolve()}")
 
 
