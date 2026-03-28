@@ -19,7 +19,7 @@ from openpyxl import load_workbook
 # ─── CONFIGURAÇÃO ─────────────────────────────────────────────
 EXCEL_PATH  = "Aposentados Sindireceita.xlsx"
 URL         = "https://processual.trf1.jus.br/consultaProcessual/cpfCnpjParte.php?secao=TRF1"
-NUM_WORKERS = 5
+NUM_WORKERS = 8
 # ──────────────────────────────────────────────────────────────
 
 KEYWORDS_PAGO = [
