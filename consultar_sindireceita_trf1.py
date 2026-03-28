@@ -136,7 +136,8 @@ async def consultar_cpf(page, cpf_raw, orig_proc, primeira_vez):
             await page.goto(prc['href'], timeout=30000, wait_until='networkidle')
         else:
             # Clica no link pelo texto
-            await page.locator(f'a:has-text("{prc[\"col1\"][:20]}")').first.click()
+            prc_texto = prc['col1'][:20]
+            await page.locator(f'a:has-text("{prc_texto}")').first.click()
             await page.wait_for_load_state('networkidle', timeout=30000)
         await asyncio.sleep(2)
 
