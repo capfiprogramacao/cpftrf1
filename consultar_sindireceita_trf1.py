@@ -25,7 +25,7 @@ from openpyxl import load_workbook
 # ─── CONFIGURAÇÃO ──────────────────────────────────────────────
 EXCEL_PATH  = "SINDIRECEITA_COMPLETO.xlsx"
 URL_BUSCA   = "https://processual.trf1.jus.br/consultaProcessual/cpfCnpjParte.php?secao=TRF1"
-NUM_WORKERS = 3
+NUM_WORKERS = 1
 # ───────────────────────────────────────────────────────────────
 
 STATUS_SKIP = {"OK", "Sem PRECAT", "Não encontrado", "Erro permanente"}
@@ -119,15 +119,13 @@ async def processar_linha(page, row_num, cpf_raw, orig_proc, nome, primeira_vez)
 
     precat = prc['col1'].strip()
 
-    # ── 6. Navega ao PRC pelo href direto ────────────────────────
-    prc_href = prc.get('href')
-    if prc_href and prc_href.startswith('http'):
-        await page.goto(prc_href, timeout=30000, wait_until='networkidle')
-    else:
-        prc_texto = prc['col1'][:20]
-        await page.locator(f'a:has-text("{prc_texto}")').first.click()
-        await page.wait_for_load_state('networkidle', timeout=30000)
-    await asyncio.sleep(3)
+    # ── 6. Clica no link do PRC dentro da lista de processos ─────
+    # Não usar goto direto — TRF1 bloqueia acesso direto a PRCs
+    # Precisa clicar no link a partir da lista (sessão já ativa)
+    prc_texto = prc['col1'][:25]
+    await page.locator(f'a:has-text("{prc_texto}")').first.click()
+    await page.wait_for_load_state('networkidle', timeout=30000)
+    await asyncio.sleep(4)
 
     # ── 7. Clica na aba Movimentação ─────────────────────────────
     mov_link = page.locator('a', has_text='Movimentação')
