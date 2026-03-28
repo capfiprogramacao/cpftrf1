@@ -20,7 +20,7 @@ from openpyxl import load_workbook
 EXCEL_PATH      = "Aposentados Sindireceita.xlsx"
 CHECKPOINT_PATH = "checkpoint_trf1.json"
 URL             = "https://processual.trf1.jus.br/consultaProcessual/cpfCnpjParte.php?secao=TRF1"
-NUM_WORKERS     = 3   # navegadores simultâneos
+NUM_WORKERS     = 5   # navegadores simultâneos
 CPFS_POR_WORKER = 999999  # sem limite — processa tudo de uma vez
 # ──────────────────────────────────────────────────────────────
 
