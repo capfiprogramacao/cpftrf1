@@ -17,7 +17,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 from openpyxl import load_workbook
 
 # ─── CONFIGURAÇÃO ─────────────────────────────────────────────
-EXCEL_PATH      = "Aposentados Sindireceita.xlsx"
+EXCEL_PATH      = "Dependentes Sindireceita.xlsx"
 CHECKPOINT_PATH = "checkpoint_trf1.json"
 URL             = "https://processual.trf1.jus.br/consultaProcessual/cpfCnpjParte.php?secao=TRF1"
 NUM_WORKERS     = 5   # navegadores simultâneos
