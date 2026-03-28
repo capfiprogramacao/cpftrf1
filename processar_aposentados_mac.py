@@ -58,8 +58,8 @@ def preparar_planilha():
 
 async def consultar_cpf(page, cpf_fmt):
     await page.goto(URL, timeout=30000)
-    await page.fill('input[name="cbf"]', cpf_fmt)
-    await page.press('input[name="cbf"]', 'Enter')
+    await page.fill('input[name="cpf_cnpj"]', cpf_fmt)
+    await page.press('input[name="cpf_cnpj"]', 'Enter')
     await page.wait_for_load_state('networkidle', timeout=30000)
 
     content = await page.content()
